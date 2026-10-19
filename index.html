@@ -1,0 +1,1155 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Contador de tiros en directo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+
+/* Concepto: marcador de pabellón arriba, la "pista" con el vídeo en el centro y el registro de jugadas debajo.
+   Un solo look oscuro, con el naranja del balón como único color de acción. */
+:root {
+  --bg: #0d1015;
+  --surface: #151a21;
+  --line: #272e39;
+  --fg: #ebe7de;
+  --muted: #8c94a3;
+  --ball: #ff7a1a;
+  --on-ball: #1a0e03;
+  --made: #53d68a;
+  --miss: #ff6159;
+  --display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 var(--body);
+  padding-inline: 16px;
+  padding-block: 20px 48px;
+}
+.wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.head h1 {
+  margin: 0;
+  font: 800 clamp(30px, 8vw, 44px)/1 var(--display);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+.head p { margin: 6px 0 0; color: var(--muted); }
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.board .cell {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 12px 4px 10px; min-width: 0;
+}
+.board .cell + .cell { border-left: 1px solid var(--line); }
+.num {
+  font: 800 clamp(34px, 10vw, 60px)/1 var(--display);
+  font-variant-numeric: tabular-nums;
+}
+.lab {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cell.made .num { color: var(--made); }
+.cell.miss .num { color: var(--miss); }
+
+.screen {
+  position: relative;
+  background: #05070a;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 240px;
+  display: flex; align-items: center; justify-content: center;
+}
+#view {
+  display: block;
+  width: auto; height: auto;
+  max-width: 100%; max-height: 68vh;
+  touch-action: manipulation;
+  cursor: crosshair;
+}
+.empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 20px; text-align: center; color: var(--muted);
+}
+.empty svg { width: min(280px, 72%); height: auto; }
+.empty p { margin: 0; max-width: 34ch; }
+.flash {
+  position: absolute; left: 0; right: 0; top: 12px;
+  text-align: center;
+  font: 800 clamp(28px, 9vw, 48px)/1 var(--display);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.15s;
+  text-shadow: 0 2px 12px #000;
+}
+.flash.show { opacity: 1; }
+.flash.made { color: var(--made); }
+.flash.miss { color: var(--miss); }
+.vid-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.scrub-row { display: flex; align-items: center; gap: 12px; }
+.scrub-row input[type=range] { flex: 1; min-width: 0; accent-color: var(--ball); }
+.time { font: 400 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.panel h2 {
+  margin: 0;
+  font: 500 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tip { margin: 0; min-height: 3em; }
+.chips, .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 40px; padding: 0 12px;
+  background: transparent; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  font: 500 14px var(--body); cursor: pointer;
+}
+.chip::before {
+  content: ""; width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--muted);
+}
+.chip.done::before { background: var(--made); border-color: var(--made); }
+.chip[aria-pressed="true"] { border-color: var(--ball); color: var(--ball); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 0 18px;
+  background: var(--ball); color: var(--on-ball);
+  border: 1px solid var(--ball); border-radius: 6px;
+  font: 600 15px var(--body); cursor: pointer;
+}
+.btn.ghost { background: transparent; color: var(--fg); border-color: var(--line); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:focus-within, .btn:focus-visible, .chip:focus-visible, .mini:focus-visible,
+select:focus-visible, input[type=checkbox]:focus-visible, input[type=range]:focus-visible {
+  outline: 2px solid var(--fg); outline-offset: 2px;
+}
+.sr { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.opt { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.opt select {
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  min-height: 36px; padding: 0 8px; font: 400 14px var(--body);
+}
+.opt input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--ball); }
+.opt input[type=range] { width: 120px; accent-color: var(--ball); }
+.opt .val { font: 400 13px var(--mono); color: var(--fg); min-width: 2ch; text-align: right; }
+
+.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.log li {
+  display: grid; grid-template-columns: auto 1fr auto auto;
+  align-items: center; gap: 10px; padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.log .none { display: block; color: var(--muted); border-top: 0; padding: 0; }
+.pill {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: 3px; border: 1px solid currentColor;
+}
+.pill.made { color: var(--made); }
+.pill.miss { color: var(--miss); }
+.when { font: 400 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.mini {
+  min-height: 34px; padding: 0 10px;
+  background: transparent; color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  font: 500 13px var(--body); cursor: pointer;
+}
+details.tips summary { cursor: pointer; font-weight: 600; }
+details.tips ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
+details.tips li + li { margin-top: 6px; }
+.stat { margin: 0; font: 400 13px var(--mono); color: var(--muted); min-height: 1.5em; }
+.diag {
+  width: 100%; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px; font: 400 12px var(--mono);
+}
+@media (prefers-reduced-motion: reduce) { .flash { transition: none; } }
+
+[hidden] { display: none !important; }
+.steps { display: flex; flex-direction: column; gap: 10px; }
+.step { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.step .n { font: 500 12px var(--mono); color: var(--muted); width: 2ch; }
+.step .done-dot { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.step.ok .done-dot { background: var(--made); border-color: var(--made); }
+.hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.hist li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font: 400 13px var(--mono); }
+.hist .none { color: var(--muted); border-top: 0; padding: 0; display: block; }
+#view { max-height: 62vh; }
+.count { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 800 clamp(80px, 30vw, 160px)/1 var(--display); color: var(--ball); text-shadow: 0 2px 20px #000; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <h1>Contador de tiros</h1>
+    <p>Cámara en directo. Pon el móvil fijo en el soporte, frente al aro.</p>
+  </header>
+
+  <section class="board" aria-live="polite" aria-label="Marcador">
+    <div class="cell made"><span class="num" id="nMade">0</span><span class="lab">Metidos</span></div>
+    <div class="cell miss"><span class="num" id="nMiss">0</span><span class="lab">Fallados</span></div>
+    <div class="cell"><span class="num" id="nTot">0</span><span class="lab">Intentos</span></div>
+    <div class="cell"><span class="num" id="nPct">--</span><span class="lab">Acierto</span></div>
+  </section>
+
+  <section class="stage" style="display:flex;flex-direction:column;gap:10px">
+    <div class="screen">
+      <canvas id="view" width="720" height="405" hidden></canvas>
+      <div class="empty" id="empty">
+        <p>Pulsa «1. Activar cámara» para empezar.</p>
+      </div>
+      <div class="count" id="count" hidden></div>
+      <div class="flash" id="flash" aria-hidden="true"></div>
+    </div>
+    <video id="vid" class="vid-hidden" muted playsinline autoplay></video>
+  </section>
+
+  <section class="panel">
+    <h2>Preparación</h2>
+    <p class="tip" id="tip">Pulsa el paso 1.</p>
+    <div class="steps">
+      <div class="step" id="s1"><span class="done-dot"></span><button class="btn" id="bCam" type="button">1. Activar cámara</button></div>
+      <div class="step" id="s2"><span class="done-dot"></span><button class="btn" id="bBg" type="button" disabled>2. Capturar fondo (sin nadie)</button></div>
+      <div class="step" id="s3"><span class="done-dot"></span>
+        <button class="chip" id="chLeft" type="button" disabled aria-pressed="false">3. Aro, borde izquierdo</button>
+        <button class="chip" id="chRight" type="button" disabled aria-pressed="false">Aro, borde derecho</button>
+      </div>
+      <div class="step" id="s4"><span class="done-dot"></span><button class="btn" id="bBall" type="button" disabled>4. Foto del balón</button></div>
+      <div class="step" id="s5"><span class="done-dot"></span><button class="btn" id="go" type="button" disabled>5. Empezar</button></div>
+    </div>
+    <div class="row">
+      <label class="opt" for="voice"><input type="checkbox" id="voice">Voz</label>
+      <label class="opt" for="maskOn"><input type="checkbox" id="maskOn">Ver detección</label>
+      <label class="opt" for="hTol">Tolerancia de color
+        <input type="range" id="hTol" min="10" max="45" step="1" value="22">
+        <span class="val" id="hTolV">22</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Tiros de esta sesión</h2>
+    <ul class="log" id="log"><li class="none">Aún no hay tiros.</li></ul>
+    <p class="stat" id="stat"></p>
+    <div class="row">
+      <button class="btn ghost" id="save" type="button" disabled>Terminar y guardar sesión</button>
+      <button class="btn ghost" id="copyDiag" type="button" disabled>Copiar diagnóstico</button>
+    </div>
+    <textarea id="diagBox" class="diag" readonly hidden rows="6" aria-label="Datos de diagnóstico"></textarea>
+  </section>
+
+  <section class="panel">
+    <h2>Historial</h2>
+    <ul class="hist" id="hist"><li class="none">Aún no hay sesiones guardadas.</li></ul>
+    <div class="row"><button class="btn ghost" id="clearHist" type="button">Borrar historial</button></div>
+  </section>
+
+  <section class="panel">
+    <details class="tips">
+      <summary>Consejos</summary>
+      <ul>
+        <li>Móvil fijo en el soporte, enfocando el aro de lado o de frente, con espacio por encima del aro.</li>
+        <li>Paso 2: aparta a todos del encuadre. Se hace una cuenta atrás de 5 segundos.</li>
+        <li>Paso 4: tras la cuenta atrás, ponte con el balón a la vista y toca el balón en la imagen congelada.</li>
+        <li>Balón de color vivo y buena luz. Evita ropa o fondo del mismo color que el balón.</li>
+        <li>Con «Ver detección» el balón en movimiento se marca en magenta. Si no sale, sube la tolerancia de color.</li>
+        <li>Si el móvil se calienta, baja el brillo de pantalla. Si se mueve mucho el soporte, repite el paso 2.</li>
+        <li>Para corregir un fallo del detector, pulsa Cambiar o Borrar en esa jugada.</li>
+      </ul>
+    </details>
+  </section>
+</div>
+
+<script>
+/* ===== Núcleo: detección del balón (color + movimiento + tamaño), compensación de cámara y lógica de tiros =====
+   Coordenadas: píxeles del fotograma reducido (x a la derecha, y hacia abajo).
+   Desplazamiento de cámara s = {x, y}: lo que está en (x, y) del fondo aparece en (x + s.x, y + s.y)
+   del fotograma actual. */
+
+function hsvInto(r, g, b, o) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 0) {
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  o[0] = h; o[1] = mx === 0 ? 0 : d / mx; o[2] = mx;
+}
+
+/* Color del balón. Con fondo (bg) usa solo los píxeles del parche que cambian respecto al fondo,
+   que son los del balón, y de ellos los más saturados (los bordes se mezclan con el fondo).
+   Sin fondo usa el 25% más saturado del parche. Después, mediana por canal.
+   shift: desplazamiento de cámara del fotograma actual respecto al fondo. */
+function sampleColor(rgba, w, h, x, y, rad, bg, shift) {
+  const sx = shift ? Math.round(shift.x) : 0, sy = shift ? Math.round(shift.y) : 0;
+  const cx = Math.round(x), cy = Math.round(y);
+  const x0 = Math.max(0, cx - rad), x1 = Math.min(w - 1, cx + rad);
+  const y0 = Math.max(0, cy - rad), y1 = Math.min(h - 1, cy + rad);
+  const all = [], fg = [];
+  for (let yy = y0; yy <= y1; yy++) {
+    for (let xx = x0; xx <= x1; xx++) {
+      const i = (yy * w + xx) * 4;
+      const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const px = { r: r, g: g, b: b, s: mx === 0 ? 0 : (mx - mn) / mx };
+      all.push(px);
+      if (bg) {
+        const bx = xx - sx, by = yy - sy;
+        if (bx >= 0 && by >= 0 && bx < w && by < h) {
+          const j = (by * w + bx) * 4;
+          const d = Math.max(Math.abs(r - bg[j]), Math.abs(g - bg[j + 1]), Math.abs(b - bg[j + 2]));
+          if (d >= 28) fg.push(px);
+        }
+      }
+    }
+  }
+  const topSat = (arr, frac) => arr.slice().sort((p, q) => q.s - p.s).slice(0, Math.max(4, Math.ceil(arr.length * frac)));
+  const use = fg.length >= 4 ? topSat(fg, 0.6) : topSat(all, 0.25);
+  const med = (k) => { const a = use.map((p) => p[k]).sort((p, q) => p - q); return a[a.length >> 1]; };
+  const o = [0, 0, 0];
+  hsvInto(med('r'), med('g'), med('b'), o);
+  return { h: o[0], s: o[1], v: o[2] };
+}
+
+function makeMatcher(m, hTol) {
+  const sMin = Math.max(0.28, m.s * 0.5);
+  const vMin = Math.max(0.18, m.v * 0.35);
+  const t = [0, 0, 0];
+  return function (r, g, b) {
+    hsvInto(r, g, b, t);
+    let dh = Math.abs(t[0] - m.h);
+    if (dh > 180) dh = 360 - dh;
+    return dh <= hTol && t[1] >= sMin && t[2] >= vMin;
+  };
+}
+
+/* ---------- Cámara: desplazamiento de cada fotograma respecto al fondo ---------- */
+
+/* Pirámide de grises: nivel 0 a resolución completa, 1 a la mitad, 2 a un cuarto. */
+function makePyramid(rgba, w, h) {
+  const g0 = new Uint8Array(w * h);
+  for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+    g0[p] = (rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8;
+  }
+  const down = (src, sw, sh) => {
+    const dw = sw >> 1, dh = sh >> 1, d = new Uint8Array(dw * dh);
+    for (let y = 0; y < dh; y++) {
+      for (let x = 0; x < dw; x++) {
+        const i = 2 * y * sw + 2 * x;
+        d[y * dw + x] = (src[i] + src[i + 1] + src[i + sw] + src[i + sw + 1]) >> 2;
+      }
+    }
+    return { d: d, w: dw, h: dh };
+  };
+  const a = down(g0, w, h), b = down(a.d, a.w, a.h);
+  return { g: [g0, a.d, b.d], w: [w, a.w, b.w], h: [h, a.h, b.h] };
+}
+
+/* Diferencia media recortada entre el fotograma y el fondo desplazado. Lo recortado (T) hace que
+   lo que se mueve (jugador, balón) pese poco. Infinity si casi no se solapan. */
+function sadShift(cur, ref, w, h, sx, sy, step, T) {
+  const x0 = Math.max(0, -sx), x1 = Math.min(w, w - sx);
+  const y0 = Math.max(0, -sy), y1 = Math.min(h, h - sy);
+  if ((x1 - x0) * (y1 - y0) < w * h * 0.5) return Infinity;
+  let s = 0, n = 0;
+  for (let y = y0; y < y1; y += step) {
+    const rr = y * w, cr = (y + sy) * w + sx;
+    for (let x = x0; x < x1; x += step) {
+      let d = cur[cr + x] - ref[rr + x];
+      if (d < 0) d = -d;
+      s += d > T ? T : d;
+      n++;
+    }
+  }
+  return s / n;
+}
+
+/* Estima cuánto se ha movido la cámara: de grueso a fino (1/4, 1/2, completo). prev es el
+   desplazamiento anterior: si sigue valiendo casi igual de bien, se conserva (evita temblores).
+   Devuelve {x, y, score, edge}; edge indica que el movimiento llega al límite de búsqueda. */
+function estimateShift(cur, ref, prev, opts) {
+  const o = Object.assign({ range: 10, T: 24, keep: 1.04 }, opts || {});
+  const sad = (lv, sx, sy, step) => sadShift(cur.g[lv], ref.g[lv], cur.w[lv], cur.h[lv], sx, sy, step, o.T);
+  let b = { x: 0, y: 0, s: Infinity };
+  for (let sy = -o.range; sy <= o.range; sy++) {
+    for (let sx = -o.range; sx <= o.range; sx++) {
+      const s = sad(2, sx, sy, 2);
+      if (s < b.s) b = { x: sx, y: sy, s: s };
+    }
+  }
+  const edge = Math.abs(b.x) === o.range || Math.abs(b.y) === o.range;
+  let cx = b.x, cy = b.y;
+  for (const lv of [1, 0]) {
+    cx *= 2; cy *= 2;
+    const step = lv === 1 ? 2 : 4;
+    let best = { x: cx, y: cy, s: Infinity };
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const s = sad(lv, cx + dx, cy + dy, step);
+        if (s < best.s) best = { x: cx + dx, y: cy + dy, s: s };
+      }
+    }
+    cx = best.x; cy = best.y; b = best;
+  }
+  if (prev) {
+    const sp = sad(0, prev.x, prev.y, 4);
+    if (sp <= b.s * o.keep + 0.25) return { x: prev.x, y: prev.y, score: sp, edge: edge };
+  }
+  return { x: cx, y: cy, score: b.s, edge: edge };
+}
+
+/* Fondo estático: mediana por píxel de varios fotogramas repartidos por el vídeo.
+   Lo que se mueve (balón, jugador) desaparece de la mediana. shifts[k] es el desplazamiento de
+   cámara del fotograma k respecto al fotograma 0; así el fondo sale alineado aunque la cámara
+   se haya movido entre unos fotogramas y otros. */
+function medianBackground(frames, w, h, shifts) {
+  const K = frames.length;
+  const bg = new Uint8ClampedArray(w * h * 4);
+  const v = new Uint8Array(K), ids = new Int32Array(K), ks = new Int32Array(K);
+  const sxs = new Int32Array(K), sys = new Int32Array(K);
+  for (let k = 0; k < K; k++) {
+    const s = shifts && shifts[k];
+    sxs[k] = s ? Math.round(s.x) : 0;
+    sys[k] = s ? Math.round(s.y) : 0;
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let m = 0;
+      for (let k = 0; k < K; k++) {
+        const xx = x + sxs[k], yy = y + sys[k];
+        if (xx >= 0 && yy >= 0 && xx < w && yy < h) { ids[m] = (yy * w + xx) * 4; ks[m] = k; m++; }
+      }
+      if (m === 0) { ids[0] = (y * w + x) * 4; ks[0] = 0; m = 1; }
+      const p = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        for (let j = 0; j < m; j++) v[j] = frames[ks[j]][ids[j] + c];
+        for (let a = 1; a < m; a++) {
+          const val = v[a];
+          let b = a - 1;
+          while (b >= 0 && v[b] > val) { v[b + 1] = v[b]; b--; }
+          v[b + 1] = val;
+        }
+        bg[p + c] = v[m >> 1];
+      }
+      bg[p + 3] = 255;
+    }
+  }
+  return bg;
+}
+
+/* ---------- Balón ---------- */
+
+/* Prueba de un píxel: cambia respecto al fondo (ya desplazado) y tiene el color del balón. */
+function makeBallTest(rgba, w, h, model, o) {
+  const match = makeMatcher(model, o.hTol);
+  const bg = o.bg, thr = o.diffThr;
+  const sx = o.shift ? Math.round(o.shift.x) : 0, sy = o.shift ? Math.round(o.shift.y) : 0;
+  return function (x, y) {
+    const i = (y * w + x) * 4;
+    if (bg) {
+      const bx = x - sx, by = y - sy;
+      if (bx < 0 || by < 0 || bx >= w || by >= h) return false;
+      const j = (by * w + bx) * 4;
+      const dr = rgba[i] - bg[j], dg = rgba[i + 1] - bg[j + 1], db = rgba[i + 2] - bg[j + 2];
+      if (dr < thr && dr > -thr && dg < thr && dg > -thr && db < thr && db > -thr) return false;
+    }
+    return match(rgba[i], rgba[i + 1], rgba[i + 2]);
+  };
+}
+
+/* Devuelve {x, y, n, r} del grupo de píxeles que se mueve y tiene el color del balón, o null.
+   opts.bg: fondo estático (RGBA). opts.shift: desplazamiento de cámara. opts.prev: última posición
+   {x,y,r} reciente. Si model.n (tamaño del balón en píxeles) existe, se descartan los grupos mucho
+   más grandes o mucho más pequeños y se prefieren los de tamaño parecido. */
+function findBall(rgba, w, h, model, opts) {
+  const o = Object.assign({
+    cell: 8, minPix: 10, maxFrac: 0.03, hTol: 20, diffThr: 32,
+    bg: null, shift: null, prev: null, maskOut: null, tries: 8
+  }, opts || {});
+  const isBall = makeBallTest(rgba, w, h, model, o);
+  const n0 = model.n > 0 ? model.n : 0;
+  const mask = o.maskOut;
+  const cols = Math.ceil(w / o.cell), rows = Math.ceil(h / o.cell);
+  const counts = new Uint16Array(cols * rows);
+
+  for (let y = 0; y < h; y++) {
+    const rb = Math.floor(y / o.cell) * cols;
+    for (let x = 0; x < w; x++) {
+      const ok = isBall(x, y);
+      if (ok) counts[rb + Math.floor(x / o.cell)]++;
+      if (mask) mask[y * w + x] = ok ? 1 : 0;
+    }
+  }
+
+  const bs = new Uint16Array(cols * rows);
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      let s = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = cx + dx, y = cy + dy;
+          if (x >= 0 && y >= 0 && x < cols && y < rows) s += counts[y * cols + x];
+        }
+      }
+      bs[cy * cols + cx] = s;
+    }
+  }
+
+  function refine(px, py) {
+    let half = o.cell * 1.5, n = 0, core = 0, fill = 0, aspect = 1;
+    for (let it = 0; it < 3; it++) {
+      const x0 = Math.max(0, Math.floor(px - half)), x1 = Math.min(w - 1, Math.ceil(px + half));
+      const y0 = Math.max(0, Math.floor(py - half)), y1 = Math.min(h - 1, Math.ceil(py + half));
+      let sx = 0, sy = 0, mnx = 1e9, mxx = -1, mny = 1e9, mxy = -1;
+      n = 0; core = 0;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          if (isBall(x, y)) {
+            sx += x; sy += y; n++;
+            if (x < mnx) mnx = x; if (x > mxx) mxx = x;
+            if (y < mny) mny = y; if (y > mxy) mxy = y;
+            // píxel "macizo": los cuatro vecinos también cuentan. Una línea fina no tiene ninguno.
+            if (x > 0 && y > 0 && x < w - 1 && y < h - 1 &&
+                isBall(x - 1, y) && isBall(x + 1, y) && isBall(x, y - 1) && isBall(x, y + 1)) core++;
+          }
+        }
+      }
+      if (n < o.minPix) return null;
+      px = sx / n; py = sy / n;
+      const bw = mxx - mnx + 1, bh = mxy - mny + 1;
+      fill = n / (bw * bh);
+      aspect = Math.min(bw, bh) / Math.max(bw, bh);
+      half = Math.max(o.cell * 1.5, Math.sqrt(n / Math.PI) * 1.7);
+    }
+    return { x: px, y: py, n: n, r: Math.sqrt(n / Math.PI), fill: fill, aspect: aspect, solid: n ? core / n : 0 };
+  }
+
+  const cands = [];
+  for (let k = 0; k < o.tries; k++) {
+    let best = 0, bi = -1;
+    for (let i = 0; i < bs.length; i++) if (bs[i] > best) { best = bs[i]; bi = i; }
+    if (bi < 0 || best < o.minPix) break;
+    const c0 = bi % cols, r0 = Math.floor(bi / cols);
+    const blob = refine((c0 + 0.5) * o.cell, (r0 + 0.5) * o.cell);
+    const cc = blob ? Math.floor(blob.x / o.cell) : c0;
+    const rr = blob ? Math.floor(blob.y / o.cell) : r0;
+    const sup = blob ? Math.max(3, Math.ceil(blob.r * 1.5 / o.cell) + 1) : 3;
+    for (let dy = -sup; dy <= sup; dy++) {
+      for (let dx = -sup; dx <= sup; dx++) {
+        const x = cc + dx, y = rr + dy;
+        if (x >= 0 && y >= 0 && x < cols && y < rows) bs[y * cols + x] = 0;
+      }
+    }
+    bs[bi] = 0;
+    if (!blob || blob.n > o.maxFrac * w * h) continue;
+    if (blob.solid < 0.12) continue;      // línea fina (borde de un objeto fijo que parece moverse): no es un balón
+    if (n0 && (blob.n > 10 * n0 || blob.n < 0.12 * n0)) continue;
+    cands.push(blob);
+  }
+  if (!cands.length) return null;
+
+  let bestC = null, bestS = -1;
+  for (const c of cands) {
+    const shape = Math.min(1, c.fill / 0.55) * (c.aspect > 0.4 ? 1 : 0.5);
+    let s;
+    if (n0) {
+      const z = Math.log(c.n / n0) / 0.9;
+      s = Math.exp(-0.5 * z * z) * shape;
+    } else {
+      s = c.n * shape;
+    }
+    if (o.prev) {
+      const d = Math.hypot(c.x - o.prev.x, c.y - o.prev.y);
+      const sc = o.prev.r * 5 + 12;
+      // la cercanía a lo último visto ayuda, pero con un suelo: si lo último fue un falso positivo,
+      // un balón de verdad lejos de él tiene que poder ganarle
+      s = s * Math.max(0.35, 1 / (1 + (d / sc) * (d / sc)));
+    }
+    if (s > bestS) { bestS = s; bestC = c; }
+  }
+  return bestC;
+}
+
+/* Tamaño del balón en píxeles: los píxeles en movimiento y del color del balón conectados al
+   punto tocado. 0 si no se puede medir (balón quieto, o pegado a algo grande del mismo color). */
+function ballSizeAt(rgba, w, h, model, x, y, opts) {
+  const o = Object.assign({ hTol: 20, diffThr: 32, bg: null, shift: null, win: 40, seek: 8, cap: 3000 }, opts || {});
+  const isBall = makeBallTest(rgba, w, h, model, o);
+  const cx = Math.round(x), cy = Math.round(y);
+  const x0 = Math.max(0, cx - o.win), x1 = Math.min(w - 1, cx + o.win);
+  const y0 = Math.max(0, cy - o.win), y1 = Math.min(h - 1, cy + o.win);
+  const ww = x1 - x0 + 1, wh = y1 - y0 + 1;
+  let sx = -1, sy = -1, bd = 1e9;
+  for (let yy = Math.max(y0, cy - o.seek); yy <= Math.min(y1, cy + o.seek); yy++) {
+    for (let xx = Math.max(x0, cx - o.seek); xx <= Math.min(x1, cx + o.seek); xx++) {
+      const d = (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy);
+      if (d < bd && isBall(xx, yy)) { bd = d; sx = xx; sy = yy; }
+    }
+  }
+  if (sx < 0) return 0;
+  const seen = new Uint8Array(ww * wh);
+  const stack = [sx, sy];
+  seen[(sy - y0) * ww + (sx - x0)] = 1;
+  let n = 0;
+  while (stack.length) {
+    const yy = stack.pop(), xx = stack.pop();
+    n++;
+    if (n > o.cap) return 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = xx + dx, ny = yy + dy;
+        if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
+        const k = (ny - y0) * ww + (nx - x0);
+        if (seen[k]) continue;
+        seen[k] = 1;
+        if (isBall(nx, ny)) stack.push(nx, ny);
+      }
+    }
+  }
+  return n;
+}
+
+function makeRim(a, b) {
+  return {
+    cx: (a.x + b.x) / 2,
+    cy: (a.y + b.y) / 2,
+    r: Math.max(4, Math.hypot(a.x - b.x, a.y - b.y) / 2)
+  };
+}
+
+/* Detector de tiros. push(t, ball|null) en cada fotograma; devuelve un evento
+   {type:'made'|'miss', t, x, y} cuando se resuelve un tiro, o null.
+   Todas las distancias van en radios de aro (R). */
+function createShotTracker(rim, userOpts) {
+  const o = Object.assign({
+    armAbove: 0.5,   // el balón debe estar al menos 0.5R por encima del aro para armar
+    armSide: 3.5,    // y a menos de 3.5R en horizontal
+    armMax: 6,       // y a menos de 6R del centro del aro
+    makeHalf: 1.0,   // cruza la línea del aro (o aparece justo debajo) dentro de ±1.0R: metido
+    near: 3.2,       // se considera intento si se acerca a menos de 3.2R (el aro se ve de lado)
+    far: 7,          // mientras hay un intento, lo detectado a más de 7R del aro se ignora (jugador, fondo)
+    lost: 0.8,       // segundos sin ver el balón para cerrar el intento
+    cooldown: 1.2,   // segundos sin armar tras cerrar un tiro
+    maxGap: 0.8,     // hueco máximo entre muestras para interpolar el cruce
+    minDescent: 0.8, // descenso mínimo (en R) para contar un intento sin cruce
+    shortGap: 0.3,  // hasta este hueco (s) se interpola el cruce; con huecos mayores manda dónde reaparece el balón
+    jump: 8          // saltos de más de 8R en 0.12 s se tratan como ruido
+  }, userOpts || {});
+  const R = rim.r;
+  let a = null, last = null, cool = -1;
+
+  const dist = (p) => Math.hypot(p.x - rim.cx, p.y - rim.cy) / R;
+
+  function done(type, tNow, tEvent, pos) {
+    a = null;
+    cool = tNow + o.cooldown;
+    return { type: type, t: tEvent, x: pos.x, y: pos.y };
+  }
+
+  function resolve(tNow) {
+    const L = a.last;
+    const attempt = a.crossed || a.descent >= o.minDescent * R;
+    if (attempt && a.minD <= o.near) {
+      // el balón desaparece (red, aro) justo encima del aro, dentro de su anchura y bajando
+      const vanishedInside = !a.crossed && a.vy > 0 &&
+        Math.abs(L.x - rim.cx) <= o.makeHalf * R &&
+        L.y >= rim.cy - 1.6 * R && a.minD <= 1.6;
+      if (vanishedInside) return done('made', tNow, L.t, L);
+      return done('miss', tNow, a.tMin, a.minPos);
+    }
+    a = null;
+    return null;
+  }
+
+  // x efectivo del cruce: interpolado si el hueco es corto; si es largo, donde reaparece debajo del aro
+  function crossX(prev, ball, t) {
+    const f = (rim.cy - prev.y) / (ball.y - prev.y);
+    const xi = prev.x + f * (ball.x - prev.x);
+    // hueco corto: deben cuadrar la línea recta y el punto donde reaparece (vale el más alejado del centro)
+    const far = Math.abs(xi - rim.cx) > Math.abs(ball.x - rim.cx) ? xi : ball.x;
+    return { f: f, x: (t - prev.t) <= o.shortGap ? far : ball.x };
+  }
+
+  function push(t, ball) {
+    if (ball) {
+      const d0 = dist(ball);
+      if (a && d0 > o.far) {
+        ball = null;            // otro objeto lejos del aro durante un intento: no es el balón del tiro
+      } else if (last && d0 > o.armMax && t - last.t <= 0.12 &&
+                 Math.hypot(ball.x - last.x, ball.y - last.y) > o.jump * R) {
+        ball = null;            // salto brusco lejos del aro: ruido. Cerca del aro nunca se descarta
+      }
+    }
+    if (!ball) {
+      if (a && t - a.seen > o.lost) return resolve(t);
+      return null;
+    }
+    const prev = last;
+    last = { t: t, x: ball.x, y: ball.y };
+    if (t < cool) return null;
+    const d = dist(ball);
+    if (!a) {
+      const recent = prev && t - prev.t <= o.maxGap;
+      // cruce directo: se vio el balón encima del aro y la siguiente vez debajo, aunque no hubiera armado
+      if (recent && prev.y < rim.cy && ball.y >= rim.cy &&
+          prev.y > rim.cy - 8 * R && Math.abs(prev.x - rim.cx) < 5 * R) {
+        const c = crossX(prev, ball, t);
+        if (Math.abs(c.x - rim.cx) <= o.makeHalf * R) {
+          return done('made', t, prev.t + c.f * (t - prev.t), { x: c.x, y: rim.cy });
+        }
+      }
+      if (ball.y < rim.cy - o.armAbove * R &&
+          Math.abs(ball.x - rim.cx) < o.armSide * R && d <= o.armMax) {
+        const dy0 = recent ? ball.y - prev.y : 0;
+        a = { seen: t, minD: d, tMin: t, minPos: last, descent: Math.max(0, dy0), vy: dy0, crossed: false, last: last };
+      }
+      return null;
+    }
+    if (d < a.minD) { a.minD = d; a.tMin = t; a.minPos = last; }
+    if (prev && t - prev.t <= o.maxGap) {
+      const dy = ball.y - prev.y;
+      a.vy = dy;
+      if (dy > 0) a.descent += dy;
+      if (prev.y < rim.cy && ball.y >= rim.cy) {
+        const c = crossX(prev, ball, t);
+        a.crossed = true;
+        if (Math.abs(c.x - rim.cx) <= o.makeHalf * R) {
+          return done('made', t, prev.t + c.f * (t - prev.t), { x: c.x, y: rim.cy });
+        }
+      }
+    }
+    a.seen = t;
+    a.last = last;
+    return null;
+  }
+
+  function flush(t) {
+    return a ? resolve(t) : null;
+  }
+
+  return { push: push, flush: flush };
+}
+
+
+</script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var PW = 640, PH = 360;
+  var vid = $('vid'), view = $('view'), vctx = view.getContext('2d');
+  var proc = document.createElement('canvas');
+  var pctx = proc.getContext('2d', { willReadFrequently: true });
+  var maskBuf = null, maskCv = document.createElement('canvas'), maskCtx = maskCv.getContext('2d'), maskImg = null;
+  var frozenCv = document.createElement('canvas'), frozenCtx = frozenCv.getContext('2d');
+  var cs = getComputedStyle(document.documentElement);
+  var C = { ball: cs.getPropertyValue('--ball').trim() || '#ff7a1a', fg: cs.getPropertyValue('--fg').trim() || '#ebe7de' };
+
+  var stream = null, camOn = false, busy = false, running = false, loopOn = false;
+  var bg = null, bgPyr = null, curShift = { x: 0, y: 0 };
+  var model = null, rimL = null, rimR = null, rim = null, target = null, frozen = null;
+  var tracker = null, events = [], trail = [], prevBall = null, prevT = -1, trace = [], shiftLog = [], shiftBase = null, camMax = 0;
+  var t0 = 0, tNow = 0, flashTimer = 0, lockObj = null, frames = 0, tStartWall = 0, lastDraw = 0;
+
+  function fmt(t) { var m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(1).padStart(4, '0'); }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function hTolNow() { return parseInt($('hTol').value, 10) || 22; }
+
+  function tip(msg) { $('tip').textContent = msg; }
+
+  function setUi() {
+    var ready = camOn && bg && rim && model;
+    $('s1').classList.toggle('ok', camOn);
+    $('s2').classList.toggle('ok', !!bg);
+    $('s3').classList.toggle('ok', !!rim);
+    $('s4').classList.toggle('ok', !!model);
+    $('bCam').disabled = busy || running;
+    $('bCam').textContent = camOn ? '1. Cámara activa' : '1. Activar cámara';
+    $('bBg').disabled = !camOn || busy || running;
+    $('chLeft').disabled = !bg || busy || running;
+    $('chRight').disabled = !bg || busy || running;
+    $('chLeft').setAttribute('aria-pressed', String(target === 'left'));
+    $('chRight').setAttribute('aria-pressed', String(target === 'right'));
+    $('chLeft').classList.toggle('done', !!rimL);
+    $('chRight').classList.toggle('done', !!rimR);
+    $('bBall').disabled = !bg || busy || running;
+    $('go').disabled = !running && !(ready && !busy);
+    $('go').textContent = running ? 'Detener' : '5. Empezar';
+    $('save').disabled = running || !events.length;
+    $('copyDiag').disabled = running || !trace.length;
+  }
+
+  function score() {
+    var m = events.filter(function (e) { return e.type === 'made'; }).length, n = events.length;
+    $('nMade').textContent = m; $('nMiss').textContent = n - m; $('nTot').textContent = n;
+    $('nPct').textContent = n ? Math.round(100 * m / n) + '%' : '--';
+  }
+
+  function renderLog() {
+    var ul = $('log');
+    if (!events.length) { ul.innerHTML = '<li class="none">Aún no hay tiros.</li>'; return; }
+    var html = '';
+    for (var i = events.length - 1; i >= 0; i--) {
+      var e = events[i];
+      html += '<li><span class="pill ' + e.type + '">' + (e.type === 'made' ? 'Metido' : 'Fallado') + '</span>' +
+        '<span class="when">' + fmt(e.t) + '</span>' +
+        '<button class="mini" type="button" data-act="flip" data-i="' + i + '">Cambiar</button>' +
+        '<button class="mini" type="button" data-act="del" data-i="' + i + '">Borrar</button></li>';
+    }
+    ul.innerHTML = html;
+  }
+
+  function flash(type) {
+    var f = $('flash');
+    f.textContent = type === 'made' ? 'Metido' : 'Fallado';
+    f.className = 'flash ' + type + ' show';
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function () { f.classList.remove('show'); }, 900);
+  }
+
+  function say(type) {
+    if (!$('voice').checked || !window.speechSynthesis) return;
+    try {
+      var u = new SpeechSynthesisUtterance(type === 'made' ? 'Metido' : 'Fallo');
+      u.lang = 'es-ES';
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  function addEvent(ev) { events.push(ev); score(); renderLog(); flash(ev.type); say(ev.type); setUi(); }
+
+  /* ---------- análisis ---------- */
+  function readFrame() { pctx.drawImage(vid, 0, 0, PW, PH); return pctx.getImageData(0, 0, PW, PH); }
+
+  function updateShift(img) {
+    if (!bgPyr) return;
+    var s = estimateShift(makePyramid(img.data, PW, PH), bgPyr, curShift);
+    curShift = { x: s.x, y: s.y };
+  }
+
+  function logShift(t) {
+    var last = shiftLog.length ? shiftLog[shiftLog.length - 1] : null;
+    if (!last || last[1] !== curShift.x || last[2] !== curShift.y) shiftLog.push([Math.round(t * 100) / 100, curShift.x, curShift.y]);
+    if (!shiftBase) shiftBase = { x: curShift.x, y: curShift.y };
+    camMax = Math.max(camMax, Math.abs(curShift.x - shiftBase.x), Math.abs(curShift.y - shiftBase.y));
+  }
+
+  function analyze(img, t, useTracker) {
+    updateShift(img);
+    if (!model || !bg) return null;
+    var on = $('maskOn').checked, prev = null;
+    if (useTracker && prevBall && t - prevT >= 0 && t - prevT < 0.25) {
+      prev = { x: prevBall.x + curShift.x, y: prevBall.y + curShift.y, r: prevBall.r };
+    }
+    var b = findBall(img.data, PW, PH, model, { bg: bg, shift: curShift, prev: prev, hTol: hTolNow(), minPix: 14, maskOut: on ? maskBuf : null });
+    if (useTracker && b) { prevBall = { x: b.x - curShift.x, y: b.y - curShift.y, r: b.r }; prevT = t; }
+    return b;
+  }
+
+  /* ---------- dibujo ---------- */
+  function drawMask() {
+    if (!maskImg) { maskCv.width = PW; maskCv.height = PH; maskImg = maskCtx.createImageData(PW, PH); }
+    var d = maskImg.data;
+    for (var i = 0; i < maskBuf.length; i++) {
+      var o = i * 4;
+      if (maskBuf[i]) { d[o] = 255; d[o + 1] = 64; d[o + 2] = 200; d[o + 3] = 170; } else { d[o + 3] = 0; }
+    }
+    maskCtx.putImageData(maskImg, 0, 0);
+    vctx.drawImage(maskCv, 0, 0, view.width, view.height);
+  }
+
+  function cross(p, sc, col) {
+    vctx.strokeStyle = col; vctx.lineWidth = 2;
+    vctx.beginPath();
+    vctx.moveTo(p.x * sc - 9, p.y * sc); vctx.lineTo(p.x * sc + 9, p.y * sc);
+    vctx.moveTo(p.x * sc, p.y * sc - 9); vctx.lineTo(p.x * sc, p.y * sc + 9);
+    vctx.stroke();
+  }
+
+  function render(ball) {
+    vctx.drawImage(frozen ? frozenCv : vid, 0, 0, view.width, view.height);
+    var sc = view.width / PW;
+    if ($('maskOn').checked && model && maskBuf && !frozen) drawMask();
+    var ox = curShift.x, oy = curShift.y;
+    if (rimL) cross({ x: rimL.x + ox, y: rimL.y + oy }, sc, C.ball);
+    if (rimR) cross({ x: rimR.x + ox, y: rimR.y + oy }, sc, C.ball);
+    if (rim) {
+      vctx.strokeStyle = C.ball; vctx.lineWidth = 2;
+      vctx.beginPath();
+      vctx.ellipse((rim.cx + ox) * sc, (rim.cy + oy) * sc, rim.r * sc, Math.max(3, rim.r * sc * 0.25), 0, 0, Math.PI * 2);
+      vctx.stroke();
+    }
+    for (var i = 1; i < trail.length; i++) {
+      vctx.strokeStyle = 'rgba(255,122,26,' + (i / trail.length).toFixed(2) + ')'; vctx.lineWidth = 3;
+      vctx.beginPath(); vctx.moveTo(trail[i - 1].x * sc, trail[i - 1].y * sc); vctx.lineTo(trail[i].x * sc, trail[i].y * sc); vctx.stroke();
+    }
+    if (ball) {
+      vctx.strokeStyle = C.fg; vctx.lineWidth = 2;
+      vctx.beginPath(); vctx.arc(ball.x * sc, ball.y * sc, Math.max(6, ball.r * sc * 1.15), 0, Math.PI * 2); vctx.stroke();
+    }
+  }
+
+  /* ---------- bucle principal ---------- */
+  function schedule() {
+    if (!loopOn) return;
+    if (vid.requestVideoFrameCallback) vid.requestVideoFrameCallback(function (now) { tick(now); });
+    else requestAnimationFrame(function (now) { tick(now); });
+  }
+
+  function tick(now) {
+    if (!loopOn) return;
+    if (vid.videoWidth && vid.readyState >= 2) {
+      try {
+        if (frozen) {
+          render(null);
+        } else if (running) {
+          var t = (now - t0) / 1000;
+          tNow = t; frames++;
+          var img = readFrame();
+          var ball = analyze(img, t, true);
+          var bref = ball ? { x: ball.x - curShift.x, y: ball.y - curShift.y } : null;
+          logShift(t);
+          if (ball) { trail.push({ x: ball.x, y: ball.y }); if (trail.length > 14) trail.shift(); }
+          if (trace.length < 40000) trace.push(bref ? [Math.round(t * 100) / 100, Math.round(bref.x * 10) / 10, Math.round(bref.y * 10) / 10, ball.n] : [Math.round(t * 100) / 100]);
+          var ev = tracker.push(t, bref);
+          if (ev) addEvent(ev);
+          render(ball);
+          $('stat').textContent = fmt(t) + ' · ' + (frames / Math.max(1, t)).toFixed(0) + ' fotogramas/s analizados';
+        } else if (now - lastDraw > 60) {
+          lastDraw = now;
+          var img2 = readFrame();
+          var b2 = (bg && model && $('maskOn').checked) ? analyze(img2, 0, false) : (updateShift(img2), null);
+          render(b2);
+        }
+      } catch (err) { /* un fotograma malo no debe parar el directo */ }
+    }
+    schedule();
+  }
+
+  /* ---------- cámara ---------- */
+  async function startCam() {
+    busy = true; setUi();
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nocam');
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false
+      });
+      vid.srcObject = stream;
+      await vid.play();
+      var guard = 0;
+      while (!vid.videoWidth && guard++ < 50) await sleep(100);
+      PH = Math.max(1, Math.round(PW * vid.videoHeight / vid.videoWidth));
+      proc.width = PW; proc.height = PH;
+      maskBuf = new Uint8Array(PW * PH); maskImg = null;
+      view.width = 720; view.height = Math.round(720 * vid.videoHeight / vid.videoWidth);
+      frozenCv.width = PW; frozenCv.height = PH;
+      view.hidden = false; $('empty').hidden = true;
+      camOn = true; loopOn = true; schedule();
+      tip('Cámara lista. Paso 2: aparta a todos del encuadre y pulsa «Capturar fondo».');
+    } catch (err) {
+      var isHttp = location.protocol !== 'https:' && location.hostname !== 'localhost';
+      tip(isHttp ? 'La cámara solo funciona si la página se abre con https://. Súbela a un hosting (Netlify, GitHub Pages…).'
+        : 'No pude abrir la cámara. Revisa el permiso del navegador para esta página.');
+    }
+    busy = false; setUi();
+  }
+
+  async function countdown(n, msg) {
+    var c = $('count');
+    c.hidden = false;
+    for (var i = n; i >= 1; i--) { c.textContent = i; tip(msg); await sleep(1000); }
+    c.hidden = true;
+  }
+
+  async function captureBg() {
+    busy = true; setUi();
+    rimL = rimR = rim = null; target = null; prevBall = null;
+    bg = null; bgPyr = null; curShift = { x: 0, y: 0 };
+    await countdown(5, 'Aparta a todos del encuadre. Capturo el fondo en unos segundos.');
+    tip('Capturando fondo…');
+    var fr = [];
+    for (var i = 0; i < 12; i++) { fr.push(new Uint8ClampedArray(readFrame().data)); await sleep(200); }
+    var pyrs = fr.map(function (f) { return makePyramid(f, PW, PH); });
+    var shifts = [{ x: 0, y: 0 }];
+    for (var k = 1; k < fr.length; k++) shifts.push(estimateShift(pyrs[k], pyrs[0], null));
+    bg = medianBackground(fr, PW, PH, shifts);
+    bgPyr = makePyramid(bg, PW, PH);
+    curShift = { x: 0, y: 0 };
+    target = 'left';
+    busy = false;
+    tip('Fondo listo. Paso 3: toca el borde izquierdo del aro en la imagen.');
+    setUi();
+  }
+
+  async function ballPhoto() {
+    busy = true; target = null; setUi();
+    await countdown(5, 'Ponte frente al aro con el balón bien a la vista, en el aire si puedes. Congelo la imagen al llegar a cero.');
+    var img = readFrame();
+    updateShift(img);
+    frozenCtx.putImageData(img, 0, 0);
+    frozen = img;
+    target = 'ball';
+    busy = false;
+    tip('Imagen congelada. Toca el centro del balón.');
+    setUi();
+  }
+
+  function toProc(e) {
+    var r = view.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width * PW, y: (e.clientY - r.top) / r.height * PH };
+  }
+
+  view.addEventListener('pointerdown', function (e) {
+    if (!camOn || running || busy || !target) return;
+    var p = toProc(e), msg = '';
+    if (target === 'ball') {
+      var img = frozen;
+      var m = sampleColor(img.data, PW, PH, p.x, p.y, 5, bg, curShift);
+      m.n = ballSizeAt(img.data, PW, PH, m, p.x, p.y, { bg: bg, shift: curShift, hTol: hTolNow() });
+      if (m.s < 0.35) { tip('Ese punto tiene poco color. Toca una zona más viva del balón.'); return; }
+      model = m;
+      frozen = null;
+      target = null;
+      msg = m.n ? 'Balón registrado. Si todo está marcado, pulsa «Empezar».' : 'No pude medir el tamaño del balón; repite el paso 4 con el balón en el aire.';
+      if (!m.n) model = null;
+    } else {
+      var pr = { x: p.x - curShift.x, y: p.y - curShift.y };
+      if (target === 'left') { rimL = pr; target = 'right'; msg = 'Ahora toca el borde derecho del aro.'; }
+      else { rimR = pr; target = null; }
+      if (rimL && rimR) { rim = makeRim(rimL, rimR); msg = 'Aro marcado. Paso 4: foto del balón.'; }
+    }
+    tip(msg);
+    setUi();
+  });
+
+  $('chLeft').addEventListener('click', function () { target = 'left'; setUi(); tip('Toca el borde izquierdo del aro.'); });
+  $('chRight').addEventListener('click', function () { target = 'right'; setUi(); tip('Toca el borde derecho del aro.'); });
+  $('bCam').addEventListener('click', startCam);
+  $('bBg').addEventListener('click', captureBg);
+  $('bBall').addEventListener('click', ballPhoto);
+  $('hTol').addEventListener('input', function () { $('hTolV').textContent = $('hTol').value; });
+
+  /* ---------- sesión ---------- */
+  async function lockScreen() {
+    try { if (navigator.wakeLock) lockObj = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+  function unlockScreen() { try { if (lockObj) lockObj.release(); } catch (e) {} lockObj = null; }
+
+  function start() {
+    tracker = createShotTracker(rim);
+    events = []; trail = []; trace = []; shiftLog = []; shiftBase = null; camMax = 0; prevBall = null; prevT = -1; frames = 0;
+    score(); renderLog();
+    $('diagBox').hidden = true;
+    t0 = performance.now();
+    running = true;
+    lockScreen();
+    tip('Contando tiros. Pulsa Detener al terminar.');
+    setUi();
+  }
+
+  function stop() {
+    running = false;
+    var ev = tracker ? tracker.flush(tNow + 5) : null;
+    if (ev) addEvent(ev);
+    unlockScreen();
+    tip('Parado. Puedes guardar la sesión o seguir más tarde con «Empezar».');
+    setUi();
+  }
+
+  $('go').addEventListener('click', function () { if (running) stop(); else start(); });
+
+  $('log').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    var i = parseInt(b.getAttribute('data-i'), 10), ev = events[i];
+    if (!ev) return;
+    if (b.getAttribute('data-act') === 'flip') ev.type = ev.type === 'made' ? 'miss' : 'made';
+    else events.splice(i, 1);
+    score(); renderLog(); setUi();
+  });
+
+  /* ---------- historial (solo en este móvil) ---------- */
+  var KEY = 'contador-tiros-sesiones';
+  function loadHist() { try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { return []; } }
+  function saveHist(h) { try { localStorage.setItem(KEY, JSON.stringify(h.slice(-60))); } catch (e) {} }
+  function renderHist() {
+    var h = loadHist(), ul = $('hist');
+    if (!h.length) { ul.innerHTML = '<li class="none">Aún no hay sesiones guardadas.</li>'; return; }
+    var html = '';
+    for (var i = h.length - 1; i >= 0; i--) {
+      var s = h[i], d = new Date(s.d), n = s.m + s.f;
+      html += '<li><span>' + d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) +
+        '</span><span>' + s.m + '/' + n + '</span><span>' + (n ? Math.round(100 * s.m / n) : 0) + '%</span></li>';
+    }
+    ul.innerHTML = html;
+  }
+  $('save').addEventListener('click', function () {
+    var m = events.filter(function (e) { return e.type === 'made'; }).length;
+    var h = loadHist(); h.push({ d: new Date().toISOString(), m: m, f: events.length - m }); saveHist(h);
+    events = []; score(); renderLog(); renderHist(); setUi();
+    tip('Sesión guardada en este móvil.');
+  });
+  $('clearHist').addEventListener('click', function () {
+    if (confirm('¿Borrar todo el historial de este móvil?')) { saveHist([]); renderHist(); }
+  });
+
+  /* ---------- diagnóstico ---------- */
+  function buildDiag() {
+    return JSON.stringify({
+      v: 2, W: PW, H: PH, dur: Math.round(tNow * 100) / 100, hTol: hTolNow(), camMax: camMax, shifts: shiftLog,
+      rim: rim ? { cx: Math.round(rim.cx * 10) / 10, cy: Math.round(rim.cy * 10) / 10, r: Math.round(rim.r * 10) / 10 } : null,
+      model: model ? { h: Math.round(model.h), s: Math.round(model.s * 100) / 100, v: Math.round(model.v * 100) / 100, n: model.n || 0 } : null,
+      events: events.map(function (e) { return [e.type === 'made' ? 'M' : 'F', Math.round(e.t * 100) / 100]; }),
+      frames: trace
+    });
+  }
+  $('copyDiag').addEventListener('click', function () {
+    var txt = buildDiag(), box = $('diagBox'), btn = $('copyDiag');
+    function manual() { box.hidden = false; box.value = txt; box.focus(); box.select(); $('stat').textContent = 'Cópialo a mano desde el cuadro de abajo.'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(function () { btn.textContent = 'Copiado'; setTimeout(function () { btn.textContent = 'Copiar diagnóstico'; }, 1800); }, manual);
+    } else manual();
+  });
+
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && running) lockScreen(); });
+
+  score(); renderHist(); setUi();
+})();
+</script>
+</body>
+</html>
