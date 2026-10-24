@@ -197,6 +197,8 @@ details.tips li + li { margin-top: 6px; }
 @media (prefers-reduced-motion: reduce) { .flash { transition: none; } }
 
 [hidden] { display: none !important; }
+#loupe { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid var(--ball); background: #000; pointer-events: none; box-shadow: 0 4px 18px #000a; z-index: 3; }
+.screen { touch-action: manipulation; }
 .steps { display: flex; flex-direction: column; gap: 10px; }
 .step { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .step .n { font: 500 12px var(--mono); color: var(--muted); width: 2ch; }
@@ -231,6 +233,7 @@ details.tips li + li { margin-top: 6px; }
         <p>Pulsa «1. Activar cámara» para empezar.</p>
       </div>
       <div class="count" id="count" hidden></div>
+      <canvas id="loupe" width="120" height="120" hidden></canvas>
       <div class="flash" id="flash" aria-hidden="true"></div>
     </div>
     <video id="vid" class="vid-hidden" muted playsinline autoplay></video>
@@ -248,6 +251,15 @@ details.tips li + li { margin-top: 6px; }
       </div>
       <div class="step" id="s4"><span class="done-dot"></span><button class="btn" id="bBall" type="button" disabled>4. Foto del balón</button></div>
       <div class="step" id="s5"><span class="done-dot"></span><button class="btn" id="go" type="button" disabled>5. Empezar</button></div>
+    </div>
+    <div class="row" id="adjRow" hidden>
+      <span class="opt">Ajustar aro:</span>
+      <button class="mini" id="aL" type="button" aria-label="Mover a la izquierda">←</button>
+      <button class="mini" id="aR" type="button" aria-label="Mover a la derecha">→</button>
+      <button class="mini" id="aU" type="button" aria-label="Mover arriba">↑</button>
+      <button class="mini" id="aD" type="button" aria-label="Mover abajo">↓</button>
+      <button class="mini" id="aMinus" type="button">Aro −</button>
+      <button class="mini" id="aPlus" type="button">Aro +</button>
     </div>
     <div class="row" id="confirmRow" hidden>
       <button class="btn" id="bOk" type="button">Sí, el balón está en magenta</button>
@@ -290,6 +302,7 @@ details.tips li + li { margin-top: 6px; }
       <ul>
         <li>Móvil fijo en el soporte, enfocando el aro de lado o de frente, con espacio por encima del aro.</li>
         <li>Paso 2: aparta a todos del encuadre. Se hace una cuenta atrás de 5 segundos.</li>
+        <li>Para marcar el aro, mantén el dedo sobre el borde: sale una lupa encima del dedo. Arrastra hasta que la cruz esté justo en el borde y suelta. Luego afina con las flechas.</li>
         <li>Paso 4: tras la cuenta atrás, ponte con el balón a la vista y toca el balón en la imagen congelada.</li>
         <li>Balón de color vivo y buena luz. Evita ropa o fondo del mismo color que el balón.</li>
         <li>Con «Ver detección» el balón en movimiento se marca en magenta. Si no sale, sube la tolerancia de color.</li>
@@ -844,6 +857,8 @@ function createStaticFilter(userOpts) {
   function setUi() {
     var ready = camOn && bg && rim && model && target !== 'confirm';
     $('confirmRow').hidden = target !== 'confirm';
+    $('adjRow').hidden = !(rim && camOn && !running && target !== 'confirm');
+    view.style.touchAction = (target === 'left' || target === 'right' || target === 'ball') ? 'none' : 'manipulation';
     $('s1').classList.toggle('ok', camOn);
     $('s2').classList.toggle('ok', !!bg);
     $('s3').classList.toggle('ok', !!rim);
@@ -1104,7 +1119,7 @@ function createStaticFilter(userOpts) {
     curShift = { x: 0, y: 0 };
     target = 'left';
     busy = false;
-    tip('Fondo listo. Paso 3: toca el borde izquierdo del aro en la imagen.');
+    tip('Fondo listo. Paso 3: mantén el dedo en el borde izquierdo del aro, aparecerá una lupa. Arrastra hasta que la cruz esté justo en el borde y suelta.');
     setUi();
   }
 
@@ -1126,9 +1141,8 @@ function createStaticFilter(userOpts) {
     return { x: (e.clientX - r.left) / r.width * PW, y: (e.clientY - r.top) / r.height * PH };
   }
 
-  view.addEventListener('pointerdown', function (e) {
-    if (!camOn || running || busy || !target || target === 'confirm') return;
-    var p = toProc(e), msg = '';
+  function commitPoint(p) {
+    var msg = '';
     if (target === 'ball') {
       var img = frozen;
       var m = sampleColor(img.data, PW, PH, p.x, p.y, 5, bg, curShift);
@@ -1144,16 +1158,69 @@ function createStaticFilter(userOpts) {
         : 'No reconozco el balón con ese color. Toca de nuevo en otro punto del balón o haz una foto nueva.';
     } else {
       var pr = { x: p.x - curShift.x, y: p.y - curShift.y };
-      if (target === 'left') { rimL = pr; target = 'right'; msg = 'Ahora toca el borde derecho del aro.'; }
+      if (target === 'left') { rimL = pr; target = 'right'; msg = 'Ahora igual con el borde derecho del aro.'; }
       else { rimR = pr; target = null; }
-      if (rimL && rimR) { rim = makeRim(rimL, rimR); msg = 'Aro marcado. Paso 4: foto del balón.'; }
+      if (rimL && rimR) { rim = makeRim(rimL, rimR); msg = 'Aro marcado. Si no cuadra, afínalo con las flechas «Ajustar aro». Paso 4: foto del balón.'; }
     }
     tip(msg);
     setUi();
-  });
+  }
 
-  $('chLeft').addEventListener('click', function () { target = 'left'; setUi(); tip('Toca el borde izquierdo del aro.'); });
-  $('chRight').addEventListener('click', function () { target = 'right'; setUi(); tip('Toca el borde derecho del aro.'); });
+  /* Lupa: se arrastra el dedo y se suelta sobre el punto. La lupa sale encima del dedo para verlo. */
+  var loupe = $('loupe'), lctx = loupe.getContext('2d'), dragging = false, dragP = null;
+  function drawLoupe(e) {
+    var scr = view.parentElement.getBoundingClientRect(), vr = view.getBoundingClientRect();
+    var src = frozen ? frozenCv : vid, k = frozen ? 1 : vid.videoWidth / PW, half = 15;
+    lctx.fillStyle = '#000'; lctx.fillRect(0, 0, 120, 120);
+    try { lctx.drawImage(src, (dragP.x - half) * k, (dragP.y - half) * k, 2 * half * k, 2 * half * k, 0, 0, 120, 120); } catch (err) {}
+    lctx.strokeStyle = '#ff7a1a'; lctx.lineWidth = 1.5;
+    lctx.beginPath(); lctx.moveTo(60, 40); lctx.lineTo(60, 80); lctx.moveTo(40, 60); lctx.lineTo(80, 60); lctx.stroke();
+    var x = Math.max(0, Math.min(scr.width - 120, e.clientX - scr.left - 60));
+    var y = e.clientY - scr.top - 150;
+    if (y < 0) y = e.clientY - scr.top + 40;
+    loupe.style.left = x + 'px'; loupe.style.top = y + 'px';
+    loupe.hidden = false;
+  }
+  view.addEventListener('pointerdown', function (e) {
+    if (!camOn || running || busy || !target || target === 'confirm') return;
+    dragging = true; dragP = toProc(e);
+    try { view.setPointerCapture(e.pointerId); } catch (err) {}
+    drawLoupe(e);
+  });
+  view.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    dragP = toProc(e); drawLoupe(e);
+  });
+  function endDrag(e, commit) {
+    if (!dragging) return;
+    dragging = false; loupe.hidden = true;
+    if (commit && dragP) commitPoint(dragP);
+  }
+  view.addEventListener('pointerup', function (e) { endDrag(e, true); });
+  view.addEventListener('pointercancel', function (e) { endDrag(e, false); });
+
+  /* Ajuste fino del aro con flechas (se mantiene pulsado para repetir) */
+  function nudge(dx, dy, dr) {
+    if (!rim) return;
+    rim = { cx: rim.cx + dx, cy: rim.cy + dy, r: Math.max(4, rim.r + dr) };
+    rimL = { x: rim.cx - rim.r, y: rim.cy }; rimR = { x: rim.cx + rim.r, y: rim.cy };
+  }
+  function holdRepeat(id, fn) {
+    var el = $(id), t1 = 0, t2 = 0;
+    function stopRep() { clearTimeout(t1); clearInterval(t2); }
+    el.addEventListener('pointerdown', function (e) { e.preventDefault(); fn(); stopRep(); t1 = setTimeout(function () { t2 = setInterval(fn, 90); }, 350); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (n) { el.addEventListener(n, stopRep); });
+    el.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') fn(); });
+  }
+  holdRepeat('aL', function () { nudge(-1, 0, 0); });
+  holdRepeat('aR', function () { nudge(1, 0, 0); });
+  holdRepeat('aU', function () { nudge(0, -1, 0); });
+  holdRepeat('aD', function () { nudge(0, 1, 0); });
+  holdRepeat('aMinus', function () { nudge(0, 0, -0.5); });
+  holdRepeat('aPlus', function () { nudge(0, 0, 0.5); });
+
+  $('chLeft').addEventListener('click', function () { target = 'left'; setUi(); tip('Mantén el dedo en el borde izquierdo del aro y suelta con la cruz de la lupa sobre el borde.'); });
+  $('chRight').addEventListener('click', function () { target = 'right'; setUi(); tip('Mantén el dedo en el borde derecho del aro y suelta con la cruz de la lupa sobre el borde.'); });
   $('bCam').addEventListener('click', startCam);
   $('bBg').addEventListener('click', captureBg);
   $('bBall').addEventListener('click', ballPhoto);
