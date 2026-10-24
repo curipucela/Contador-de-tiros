@@ -206,6 +206,7 @@ details.tips li + li { margin-top: 6px; }
 .hist li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font: 400 13px var(--mono); }
 .hist .none { color: var(--muted); border-top: 0; padding: 0; display: block; }
 #view { max-height: 62vh; }
+@media (orientation: landscape) { #view { max-height: 88vh; } }
 .count { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 800 clamp(80px, 30vw, 160px)/1 var(--display); color: var(--ball); text-shadow: 0 2px 20px #000; pointer-events: none; }
 </style>
 </head>
@@ -247,6 +248,9 @@ details.tips li + li { margin-top: 6px; }
       </div>
       <div class="step" id="s4"><span class="done-dot"></span><button class="btn" id="bBall" type="button" disabled>4. Foto del balón</button></div>
       <div class="step" id="s5"><span class="done-dot"></span><button class="btn" id="go" type="button" disabled>5. Empezar</button></div>
+    </div>
+    <div class="row">
+      <button class="btn ghost" id="bFs" type="button" hidden>Pantalla completa horizontal</button>
     </div>
     <div class="row">
       <label class="opt" for="voice"><input type="checkbox" id="voice">Voz</label>
@@ -783,6 +787,7 @@ function createShotTracker(rim, userOpts) {
   var bg = null, bgPyr = null, curShift = { x: 0, y: 0 };
   var model = null, rimL = null, rimR = null, rim = null, target = null, frozen = null;
   var tracker = null, events = [], trail = [], prevBall = null, prevT = -1, trace = [], shiftLog = [], shiftBase = null, camMax = 0;
+  var lastVW = 0, lastVH = 0, loopId = 0, rotTimer = 0;
   var t0 = 0, tNow = 0, flashTimer = 0, lockObj = null, frames = 0, tStartWall = 0, lastDraw = 0;
 
   function fmt(t) { var m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(1).padStart(4, '0'); }
@@ -927,13 +932,15 @@ function createShotTracker(rim, userOpts) {
   /* ---------- bucle principal ---------- */
   function schedule() {
     if (!loopOn) return;
-    if (vid.requestVideoFrameCallback) vid.requestVideoFrameCallback(function (now) { tick(now); });
-    else requestAnimationFrame(function (now) { tick(now); });
+    var id = loopId;
+    if (vid.requestVideoFrameCallback) vid.requestVideoFrameCallback(function (now) { if (id === loopId) tick(now); });
+    else requestAnimationFrame(function (now) { if (id === loopId) tick(now); });
   }
 
   function tick(now) {
     if (!loopOn) return;
     if (vid.videoWidth && vid.readyState >= 2) {
+      if (lastVW && (vid.videoWidth !== lastVW || vid.videoHeight !== lastVH)) { onResize(); schedule(); return; }
       try {
         if (frozen) {
           render(null);
@@ -962,25 +969,62 @@ function createShotTracker(rim, userOpts) {
   }
 
   /* ---------- cámara ---------- */
+  function sizeFromVideo() {
+    var vw = vid.videoWidth, vh = vid.videoHeight, k = 640 / Math.max(vw, vh);
+    PW = Math.max(1, Math.round(vw * k)); PH = Math.max(1, Math.round(vh * k));
+    proc.width = PW; proc.height = PH;
+    maskBuf = new Uint8Array(PW * PH); maskImg = null;
+    frozenCv.width = PW; frozenCv.height = PH;
+    var vk = 720 / Math.max(vw, vh);
+    view.width = Math.round(vw * vk); view.height = Math.round(vh * vk);
+    lastVW = vw; lastVH = vh;
+  }
+
+  async function openStream() {
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false
+    });
+    vid.srcObject = stream;
+    await vid.play();
+    var guard = 0;
+    while (!vid.videoWidth && guard++ < 50) await sleep(100);
+    sizeFromVideo();
+  }
+
+  /* El móvil se ha girado: cambia el tamaño de la imagen y la calibración ya no vale. */
+  function onResize() {
+    var wasRunning = running;
+    if (running) stop();
+    sizeFromVideo();
+    bg = null; bgPyr = null; rimL = rimR = rim = null; frozen = null; target = null; prevBall = null;
+    curShift = { x: 0, y: 0 };
+    tip(wasRunning ? 'Has girado el móvil y se paró el conteo. Repite los pasos 2 y 3 y pulsa Empezar.'
+      : 'Has girado el móvil. Repite el paso 2 (fondo) y el paso 3 (aro).');
+    setUi();
+  }
+
+  async function restartCam() {
+    if (!camOn || running || busy) return;
+    try {
+      await openStream();
+      loopId++; schedule();
+    } catch (err) {}
+  }
+
+  function onRot() {
+    clearTimeout(rotTimer);
+    rotTimer = setTimeout(restartCam, 700);
+  }
+
   async function startCam() {
     busy = true; setUi();
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nocam');
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false
-      });
-      vid.srcObject = stream;
-      await vid.play();
-      var guard = 0;
-      while (!vid.videoWidth && guard++ < 50) await sleep(100);
-      PH = Math.max(1, Math.round(PW * vid.videoHeight / vid.videoWidth));
-      proc.width = PW; proc.height = PH;
-      maskBuf = new Uint8Array(PW * PH); maskImg = null;
-      view.width = 720; view.height = Math.round(720 * vid.videoHeight / vid.videoWidth);
-      frozenCv.width = PW; frozenCv.height = PH;
+      await openStream();
       view.hidden = false; $('empty').hidden = true;
       camOn = true; loopOn = true; schedule();
-      tip('Cámara lista. Paso 2: aparta a todos del encuadre y pulsa «Capturar fondo».');
+      tip('Cámara lista. Paso 2: aparta a todos del encuadre y pulsa «Capturar fondo». Gira el móvil a la posición definitiva ANTES del paso 2.');
     } catch (err) {
       var isHttp = location.protocol !== 'https:' && location.hostname !== 'localhost';
       tip(isHttp ? 'La cámara solo funciona si la página se abre con https://. Súbela a un hosting (Netlify, GitHub Pages…).'
@@ -1145,6 +1189,19 @@ function createShotTracker(rim, userOpts) {
       navigator.clipboard.writeText(txt).then(function () { btn.textContent = 'Copiado'; setTimeout(function () { btn.textContent = 'Copiar diagnóstico'; }, 1800); }, manual);
     } else manual();
   });
+
+  if (document.documentElement.requestFullscreen) $('bFs').hidden = false;
+  $('bFs').addEventListener('click', async function () {
+    try { await document.documentElement.requestFullscreen(); } catch (e) {}
+    try {
+      await screen.orientation.lock('landscape');
+      tip('Pantalla horizontal fijada. Si la imagen no gira, espera un segundo o pulsa «Activar cámara» otra vez.');
+    } catch (e) {
+      tip('Este navegador no deja fijar la orientación. Activa el giro automático del móvil y gira el móvil.');
+    }
+  });
+  window.addEventListener('orientationchange', onRot);
+  if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener('change', onRot);
 
   document.addEventListener('visibilitychange', function () { if (!document.hidden && running) lockScreen(); });
 
