@@ -249,6 +249,11 @@ details.tips li + li { margin-top: 6px; }
       <div class="step" id="s4"><span class="done-dot"></span><button class="btn" id="bBall" type="button" disabled>4. Foto del balón</button></div>
       <div class="step" id="s5"><span class="done-dot"></span><button class="btn" id="go" type="button" disabled>5. Empezar</button></div>
     </div>
+    <div class="row" id="confirmRow" hidden>
+      <button class="btn" id="bOk" type="button">Sí, el balón está en magenta</button>
+      <button class="btn ghost" id="bRetap" type="button">Tocar de nuevo</button>
+      <button class="btn ghost" id="bRephoto" type="button">Nueva foto</button>
+    </div>
     <div class="row">
       <button class="btn ghost" id="bFs" type="button" hidden>Pantalla completa horizontal</button>
     </div>
@@ -503,7 +508,7 @@ function makeBallTest(rgba, w, h, model, o) {
 function findBall(rgba, w, h, model, opts) {
   const o = Object.assign({
     cell: 8, minPix: 10, maxFrac: 0.03, hTol: 20, diffThr: 32,
-    bg: null, shift: null, prev: null, maskOut: null, tries: 8
+    bg: null, shift: null, prev: null, maskOut: null, ignore: null, tries: 8
   }, opts || {});
   const isBall = makeBallTest(rgba, w, h, model, o);
   const n0 = model.n > 0 ? model.n : 0;
@@ -583,6 +588,11 @@ function findBall(rgba, w, h, model, opts) {
     if (!blob || blob.n > o.maxFrac * w * h) continue;
     if (blob.solid < 0.12) continue;      // línea fina (borde de un objeto fijo que parece moverse): no es un balón
     if (n0 && (blob.n > 10 * n0 || blob.n < 0.12 * n0)) continue;
+    if (o.ignore && o.ignore.length) {   // zonas con objetos fijos ya aprendidos
+      let skip = false;
+      for (const z of o.ignore) if (Math.hypot(blob.x - z.x, blob.y - z.y) <= z.r + blob.r * 0.5) { skip = true; break; }
+      if (skip) continue;
+    }
     cands.push(blob);
   }
   if (!cands.length) return null;
@@ -768,6 +778,40 @@ function createShotTracker(rim, userOpts) {
 
   return { push: push, flush: flush };
 }
+/* Filtro de objetos fijos: algo que sale "detectado" casi en el mismo sitio durante muchos fotogramas
+   no es un balón en vuelo (es ropa, una bolsa, un borde...). Se aprende y se ignora esa zona un tiempo.
+   Todo en coordenadas del fondo (las del seguimiento), no del fotograma. */
+function createStaticFilter(userOpts) {
+  const o = Object.assign({ dist: 5, hits: 8, gap: 0.5, ttl: 20, rmin: 8 }, userOpts || {});
+  let tracks = [], statics = [];
+  return {
+    /* zonas a ignorar, convertidas a coordenadas del fotograma actual */
+    ignoreList: function (t, shift) {
+      statics = statics.filter(function (s) { return s.until > t; });
+      const sx = shift ? shift.x : 0, sy = shift ? shift.y : 0;
+      return statics.map(function (s) { return { x: s.x + sx, y: s.y + sy, r: s.r }; });
+    },
+    /* ref = {x, y, n} en coordenadas del fondo, o null */
+    observe: function (t, ref) {
+      tracks = tracks.filter(function (k) { return t - k.t <= o.gap; });
+      if (!ref) return;
+      for (let i = 0; i < tracks.length; i++) {
+        const k = tracks[i];
+        if (Math.hypot(ref.x - k.x, ref.y - k.y) <= o.dist) {
+          k.hits++; k.t = t;
+          if (k.hits >= o.hits) {
+            statics.push({ x: k.x, y: k.y, r: Math.max(o.rmin, 1.3 * Math.sqrt(ref.n || 0)), until: t + o.ttl });
+            tracks.splice(i, 1);
+          }
+          return;
+        }
+      }
+      tracks.push({ x: ref.x, y: ref.y, t: t, hits: 1 });
+    },
+    reset: function () { tracks = []; statics = []; },
+    count: function () { return statics.length; }
+  };
+}
 
 
 </script>
@@ -787,6 +831,7 @@ function createShotTracker(rim, userOpts) {
   var bg = null, bgPyr = null, curShift = { x: 0, y: 0 };
   var model = null, rimL = null, rimR = null, rim = null, target = null, frozen = null;
   var tracker = null, events = [], trail = [], prevBall = null, prevT = -1, trace = [], shiftLog = [], shiftBase = null, camMax = 0;
+  var sfilt = createStaticFilter();
   var lastVW = 0, lastVH = 0, loopId = 0, rotTimer = 0;
   var t0 = 0, tNow = 0, flashTimer = 0, lockObj = null, frames = 0, tStartWall = 0, lastDraw = 0;
 
@@ -797,7 +842,8 @@ function createShotTracker(rim, userOpts) {
   function tip(msg) { $('tip').textContent = msg; }
 
   function setUi() {
-    var ready = camOn && bg && rim && model;
+    var ready = camOn && bg && rim && model && target !== 'confirm';
+    $('confirmRow').hidden = target !== 'confirm';
     $('s1').classList.toggle('ok', camOn);
     $('s2').classList.toggle('ok', !!bg);
     $('s3').classList.toggle('ok', !!rim);
@@ -811,7 +857,7 @@ function createShotTracker(rim, userOpts) {
     $('chRight').setAttribute('aria-pressed', String(target === 'right'));
     $('chLeft').classList.toggle('done', !!rimL);
     $('chRight').classList.toggle('done', !!rimR);
-    $('bBall').disabled = !bg || busy || running;
+    $('bBall').disabled = !bg || busy || running || target === 'confirm';
     $('go').disabled = !running && !(ready && !busy);
     $('go').textContent = running ? 'Detener' : '5. Empezar';
     $('save').disabled = running || !events.length;
@@ -881,7 +927,8 @@ function createShotTracker(rim, userOpts) {
     if (useTracker && prevBall && t - prevT >= 0 && t - prevT < 0.25) {
       prev = { x: prevBall.x + curShift.x, y: prevBall.y + curShift.y, r: prevBall.r };
     }
-    var b = findBall(img.data, PW, PH, model, { bg: bg, shift: curShift, prev: prev, hTol: hTolNow(), minPix: 14, maskOut: on ? maskBuf : null });
+    var b = findBall(img.data, PW, PH, model, { bg: bg, shift: curShift, prev: prev, hTol: hTolNow(), minPix: 14, maskOut: on ? maskBuf : null,
+      ignore: useTracker ? sfilt.ignoreList(t, curShift) : null });
     if (useTracker && b) { prevBall = { x: b.x - curShift.x, y: b.y - curShift.y, r: b.r }; prevT = t; }
     return b;
   }
@@ -909,7 +956,7 @@ function createShotTracker(rim, userOpts) {
   function render(ball) {
     vctx.drawImage(frozen ? frozenCv : vid, 0, 0, view.width, view.height);
     var sc = view.width / PW;
-    if ($('maskOn').checked && model && maskBuf && !frozen) drawMask();
+    if ((($('maskOn').checked && !frozen) || target === 'confirm') && model && maskBuf) drawMask();
     var ox = curShift.x, oy = curShift.y;
     if (rimL) cross({ x: rimL.x + ox, y: rimL.y + oy }, sc, C.ball);
     if (rimR) cross({ x: rimR.x + ox, y: rimR.y + oy }, sc, C.ball);
@@ -950,6 +997,7 @@ function createShotTracker(rim, userOpts) {
           var img = readFrame();
           var ball = analyze(img, t, true);
           var bref = ball ? { x: ball.x - curShift.x, y: ball.y - curShift.y } : null;
+          sfilt.observe(t, bref ? { x: bref.x, y: bref.y, n: ball.n } : null);
           logShift(t);
           if (ball) { trail.push({ x: ball.x, y: ball.y }); if (trail.length > 14) trail.shift(); }
           if (trace.length < 40000) trace.push(bref ? [Math.round(t * 100) / 100, Math.round(bref.x * 10) / 10, Math.round(bref.y * 10) / 10, ball.n] : [Math.round(t * 100) / 100]);
@@ -1079,18 +1127,21 @@ function createShotTracker(rim, userOpts) {
   }
 
   view.addEventListener('pointerdown', function (e) {
-    if (!camOn || running || busy || !target) return;
+    if (!camOn || running || busy || !target || target === 'confirm') return;
     var p = toProc(e), msg = '';
     if (target === 'ball') {
       var img = frozen;
       var m = sampleColor(img.data, PW, PH, p.x, p.y, 5, bg, curShift);
       m.n = ballSizeAt(img.data, PW, PH, m, p.x, p.y, { bg: bg, shift: curShift, hTol: hTolNow() });
-      if (m.s < 0.35) { tip('Ese punto tiene poco color. Toca una zona más viva del balón.'); return; }
+      if (m.s < 0.35) { tip('Ese punto tiene poco color. Toca una zona más viva del balón (o usa un balón más vistoso).'); return; }
+      if (!m.n) { tip('No pude medir el balón. Toca más al centro, o haz una foto nueva con el balón en el aire.'); return; }
       model = m;
-      frozen = null;
-      target = null;
-      msg = m.n ? 'Balón registrado. Si todo está marcado, pulsa «Empezar».' : 'No pude medir el tamaño del balón; repite el paso 4 con el balón en el aire.';
-      if (!m.n) model = null;
+      /* comprobación: qué reconocería como balón en esta misma imagen */
+      var found = findBall(img.data, PW, PH, model, { bg: bg, shift: curShift, hTol: hTolNow(), minPix: 14, maskOut: maskBuf });
+      target = 'confirm';
+      msg = found
+        ? 'Lo que está en MAGENTA es lo que reconozco como balón. Si cubre el balón (y casi nada más), pulsa «Sí».'
+        : 'No reconozco el balón con ese color. Toca de nuevo en otro punto del balón o haz una foto nueva.';
     } else {
       var pr = { x: p.x - curShift.x, y: p.y - curShift.y };
       if (target === 'left') { rimL = pr; target = 'right'; msg = 'Ahora toca el borde derecho del aro.'; }
@@ -1106,6 +1157,13 @@ function createShotTracker(rim, userOpts) {
   $('bCam').addEventListener('click', startCam);
   $('bBg').addEventListener('click', captureBg);
   $('bBall').addEventListener('click', ballPhoto);
+  $('bOk').addEventListener('click', function () {
+    frozen = null; target = null;
+    tip('Balón registrado. Activa «Ver detección» si quieres comprobarlo en vivo moviendo el balón. Después pulsa «Empezar».');
+    setUi();
+  });
+  $('bRetap').addEventListener('click', function () { model = null; target = 'ball'; tip('Toca de nuevo el centro del balón.'); setUi(); });
+  $('bRephoto').addEventListener('click', function () { model = null; frozen = null; target = null; setUi(); ballPhoto(); });
   $('hTol').addEventListener('input', function () { $('hTolV').textContent = $('hTol').value; });
 
   /* ---------- sesión ---------- */
@@ -1116,6 +1174,7 @@ function createShotTracker(rim, userOpts) {
 
   function start() {
     tracker = createShotTracker(rim);
+    sfilt.reset();
     events = []; trail = []; trace = []; shiftLog = []; shiftBase = null; camMax = 0; prevBall = null; prevT = -1; frames = 0;
     score(); renderLog();
     $('diagBox').hidden = true;
